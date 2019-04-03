@@ -14,6 +14,8 @@
 
 #include "kvs/kvs_handlers.hpp"
 
+AdaptiveThresholdHeavyHitters* sketch = new AdaptiveThresholdHeavyHitters();
+
 TEST_F(ServerHandlerTest, UserGetLWWTest) {
   Key key = "key";
   string value = "value";
@@ -30,7 +32,7 @@ TEST_F(ServerHandlerTest, UserGetLWWTest) {
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -71,7 +73,7 @@ TEST_F(ServerHandlerTest, UserGetSetTest) {
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -116,7 +118,7 @@ TEST_F(ServerHandlerTest, UserGetCausalTest) {
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -182,7 +184,7 @@ TEST_F(ServerHandlerTest, UserPutAndGetLWWTest) {
   user_request_handler(access_count, seed, put_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -207,7 +209,7 @@ TEST_F(ServerHandlerTest, UserPutAndGetLWWTest) {
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 2);
@@ -245,7 +247,7 @@ TEST_F(ServerHandlerTest, UserPutAndGetSetTest) {
   user_request_handler(access_count, seed, put_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -270,7 +272,7 @@ TEST_F(ServerHandlerTest, UserPutAndGetSetTest) {
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 2);
@@ -311,7 +313,7 @@ TEST_F(ServerHandlerTest, UserPutAndGetCausalTest) {
   user_request_handler(access_count, seed, put_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -336,7 +338,7 @@ TEST_F(ServerHandlerTest, UserPutAndGetCausalTest) {
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
                        stored_key_map, key_replication_map, local_changeset, wt,
-                       serializers, pushers);
+                       serializers, pushers, sketch);
 
   messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 2);
