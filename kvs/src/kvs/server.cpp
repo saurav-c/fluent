@@ -598,6 +598,10 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
       // Reset sketch for next epoch
       sketch->reset();
 
+<<<<<<< HEAD
+=======
+      // report key size stats
+>>>>>>> 37bca4c5bad13ccb3ee86293ecb75cc56c998d35
       KeySizeData primary_key_size;
       for (const auto& key_pair : stored_key_map) {
         if (is_primary_replica(key_pair.first, key_replication_map,
