@@ -20,12 +20,44 @@
 const string kMetadataTypeReplication = "replication";
 
 // represents the replication state for each key
-struct KeyMetadata {
+struct KeyReplication {
   map<TierId, unsigned> global_replication_;
   map<TierId, unsigned> local_replication_;
+};
+
+// keep track of the size and lattice type of the key
+struct KeyProperty {
   unsigned size_;
   LatticeType type_;
 };
+
+inline bool operator==(const KeyReplication& lhs, const KeyReplication& rhs) {
+  for (const auto& pair : lhs.global_replication_) {
+    TierId id = pair.first;
+
+    if (rhs.global_replication_.find(id) == rhs.global_replication_.end()) {
+      return false;
+    }
+
+    if (pair.second != rhs.global_replication_.at(id)) {
+      return false;
+    }
+  }
+
+  for (const auto& pair : lhs.local_replication_) {
+    TierId id = pair.first;
+
+    if (rhs.local_replication_.find(id) == rhs.local_replication_.end()) {
+      return false;
+    }
+
+    if (pair.second != rhs.local_replication_.at(id)) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 // per-tier metadata
 struct TierMetadata {
@@ -65,7 +97,14 @@ inline bool is_metadata(Key key) {
 // NOTE: This needs to be here because it needs the definition of TierMetadata
 extern map<TierId, TierMetadata> kTierMetadata;
 
-enum MetadataType { replication, server_stats, key_access, key_size };
+enum MetadataType {
+  replication,
+  server_stats,
+  key_access,
+  key_size,
+  key_access_hot,
+  key_access_cold
+};
 
 inline Key get_metadata_key(const ServerThread& st, unsigned tier_id,
                             unsigned thread_num, MetadataType type) {
@@ -74,6 +113,8 @@ inline Key get_metadata_key(const ServerThread& st, unsigned tier_id,
   switch (type) {
     case MetadataType::server_stats: metadata_type = "stats"; break;
     case MetadataType::key_access: metadata_type = "access"; break;
+    case MetadataType::key_access_hot: metadata_type = "hot_access"; break;
+    case MetadataType::key_access_cold: metadata_type = "cold_access"; break;
     case MetadataType::key_size: metadata_type = "size"; break;
     default:
       return "";  // this should never happen; see note below about
@@ -126,31 +167,31 @@ inline vector<string> split_metadata_key(Key key) {
   return tokens;
 }
 
-inline void warmup_key_metadata_map_to_defaults(
-    map<Key, KeyMetadata>& key_metadata_map,
+inline void warmup_key_replication_map_to_defaults(
+    map<Key, KeyReplication>& key_replication_map,
     unsigned& kDefaultGlobalMemoryReplication,
     unsigned& kDefaultGlobalEbsReplication,
     unsigned& kDefaultLocalReplication) {
   for (unsigned i = 1; i <= 1000000; i++) {
     // key is 8 bytes
     Key key = string(8 - std::to_string(i).length(), '0') + std::to_string(i);
-    key_metadata_map[key].global_replication_[kMemoryTierId] =
+    key_replication_map[key].global_replication_[kMemoryTierId] =
         kDefaultGlobalMemoryReplication;
-    key_metadata_map[key].global_replication_[kEbsTierId] =
+    key_replication_map[key].global_replication_[kEbsTierId] =
         kDefaultGlobalEbsReplication;
-    key_metadata_map[key].local_replication_[kMemoryTierId] =
+    key_replication_map[key].local_replication_[kMemoryTierId] =
         kDefaultLocalReplication;
-    key_metadata_map[key].local_replication_[kEbsTierId] =
+    key_replication_map[key].local_replication_[kEbsTierId] =
         kDefaultLocalReplication;
   }
 }
 
-inline void init_replication(map<Key, KeyMetadata>& key_metadata_map,
+inline void init_replication(map<Key, KeyReplication>& key_replication_map,
                              const Key& key) {
   for (const unsigned& tier_id : kAllTierIds) {
-    key_metadata_map[key].global_replication_[tier_id] =
+    key_replication_map[key].global_replication_[tier_id] =
         kTierMetadata[tier_id].default_replication_;
-    key_metadata_map[key].local_replication_[tier_id] =
+    key_replication_map[key].local_replication_[tier_id] =
         kDefaultLocalReplication;
   }
 }

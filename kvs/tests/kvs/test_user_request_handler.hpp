@@ -14,11 +14,13 @@
 
 #include "kvs/kvs_handlers.hpp"
 
+AdaptiveThresholdHeavyHitters* sketch = new AdaptiveThresholdHeavyHitters();
+
 TEST_F(ServerHandlerTest, UserGetLWWTest) {
   Key key = "key";
   string value = "value";
   serializers[LatticeType::LWW]->put(key, serialize(0, value));
-  metadata_map[key].type_ = LatticeType::LWW;
+  stored_key_map[key].type_ = LatticeType::LWW;
 
   string get_request = get_key_request(key, ip);
 
@@ -29,7 +31,8 @@ TEST_F(ServerHandlerTest, UserGetLWWTest) {
 
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -58,7 +61,7 @@ TEST_F(ServerHandlerTest, UserGetSetTest) {
   s.emplace("value2");
   s.emplace("value3");
   serializers[LatticeType::SET]->put(key, serialize(SetLattice<string>(s)));
-  metadata_map[key].type_ = LatticeType::SET;
+  stored_key_map[key].type_ = LatticeType::SET;
 
   string get_request = get_key_request(key, ip);
 
@@ -69,7 +72,8 @@ TEST_F(ServerHandlerTest, UserGetSetTest) {
 
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -94,15 +98,15 @@ TEST_F(ServerHandlerTest, UserGetSetTest) {
 TEST_F(ServerHandlerTest, UserGetCausalTest) {
   Key key = "key";
   VectorClockValuePair<SetLattice<string>> p;
-  p.vector_clock.insert(1, 1);
-  p.vector_clock.insert(2, 1);
+  p.vector_clock.insert("1", 1);
+  p.vector_clock.insert("2", 1);
   p.value.insert("value1");
   p.value.insert("value2");
   p.value.insert("value3");
 
   serializers[LatticeType::CAUSAL]->put(
       key, serialize(CausalPairLattice<SetLattice<string>>(p)));
-  metadata_map[key].type_ = LatticeType::CAUSAL;
+  stored_key_map[key].type_ = LatticeType::CAUSAL;
 
   string get_request = get_key_request(key, ip);
 
@@ -113,7 +117,8 @@ TEST_F(ServerHandlerTest, UserGetCausalTest) {
 
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -146,8 +151,8 @@ TEST_F(ServerHandlerTest, UserGetCausalTest) {
 
   EXPECT_THAT(left_set, testing::UnorderedElementsAreArray(right_set));
 
-  map<unsigned, unsigned> left_map;
-  map<unsigned, unsigned> right_map;
+  map<string, unsigned> left_map;
+  map<string, unsigned> right_map;
 
   for (const auto& pair : left_value.vector_clock()) {
     left_map[pair.first] = pair.second;
@@ -178,7 +183,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetLWWTest) {
 
   user_request_handler(access_count, seed, put_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -202,7 +208,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetLWWTest) {
 
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 2);
@@ -239,7 +246,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetSetTest) {
 
   user_request_handler(access_count, seed, put_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -263,7 +271,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetSetTest) {
 
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 2);
@@ -287,8 +296,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetSetTest) {
 TEST_F(ServerHandlerTest, UserPutAndGetCausalTest) {
   Key key = "key";
   VectorClockValuePair<SetLattice<string>> p;
-  p.vector_clock.insert(1, 1);
-  p.vector_clock.insert(2, 1);
+  p.vector_clock.insert("1", 1);
+  p.vector_clock.insert("2", 1);
   p.value.insert("value1");
   p.value.insert("value2");
   p.value.insert("value3");
@@ -303,7 +312,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetCausalTest) {
 
   user_request_handler(access_count, seed, put_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   vector<string> messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 1);
@@ -327,7 +337,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetCausalTest) {
 
   user_request_handler(access_count, seed, get_request, log_, global_hash_rings,
                        local_hash_rings, pending_requests, key_access_tracker,
-                       metadata_map, local_changeset, wt, serializers, pushers);
+                       stored_key_map, key_replication_map, local_changeset, wt,
+                       serializers, pushers, sketch);
 
   messages = get_zmq_messages();
   EXPECT_EQ(messages.size(), 2);
@@ -359,8 +370,8 @@ TEST_F(ServerHandlerTest, UserPutAndGetCausalTest) {
 
   EXPECT_THAT(left_set, testing::UnorderedElementsAreArray(right_set));
 
-  map<unsigned, unsigned> left_map;
-  map<unsigned, unsigned> right_map;
+  map<string, unsigned> left_map;
+  map<string, unsigned> right_map;
 
   for (const auto& pair : left_value.vector_clock()) {
     left_map[pair.first] = pair.second;

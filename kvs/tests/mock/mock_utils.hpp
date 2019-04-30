@@ -12,10 +12,10 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-#ifndef TESTS_MOCKED_HPP_
-#define TESTS_MOCKED_HPP_
+#ifndef KVS_TESTS_MOCKED_HPP_
+#define KVS_TESTS_MOCKED_HPP_
 
-#include "hash_ring.hpp"
+#include "kvs/include/hash_ring.hpp"
 #include "zmq/zmq_util.hpp"
 
 class MockZmqUtil : public ZmqUtilInterface {
@@ -33,8 +33,8 @@ class MockHashRingUtil : public HashRingUtilInterface {
       Address respond_address, const Key& key, bool metadata,
       map<TierId, GlobalHashRing>& global_hash_rings,
       map<TierId, LocalHashRing>& local_hash_rings,
-      map<Key, KeyMetadata>& metadata_map, SocketCache& pushers,
+      map<Key, KeyReplication>& key_replication_map, SocketCache& pushers,
       const vector<unsigned>& tier_ids, bool& succeed, unsigned& seed);
 };
 
-#endif  // TESTS_MOCKED_HPP_
+#endif  // KVS_TESTS_MOCKED_HPP_

@@ -95,7 +95,10 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
   map<Key, vector<PendingRequest>> pending_requests;
   map<Key, vector<PendingGossip>> pending_gossip;
 
-  map<Key, KeyMetadata> metadata_map;
+  // this map contains all keys that are actually stored in the KVS
+  map<Key, KeyProperty> stored_key_map;
+
+  map<Key, KeyReplication> key_replication_map;
 
   // ZMQ socket for asking kops server for IP addrs of functional nodes.
   // zmq::socket_t func_nodes_requester(context, ZMQ_REQ);
@@ -185,6 +188,7 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
   Serializer* lww_serializer;
   Serializer* set_serializer;
   Serializer* causal_serializer;
+  Serializer* cross_causal_serializer;
 
   if (kSelfTierId == kMemoryTierId) {
     MemoryLWWKVS* lww_kvs = new MemoryLWWKVS();
@@ -193,10 +197,13 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
     set_serializer = new MemorySetSerializer(set_kvs);
     MemoryCausalKVS* causal_kvs = new MemoryCausalKVS();
     causal_serializer = new MemoryCausalSerializer(causal_kvs);
+    MemoryCrossCausalKVS* cross_causal_kvs = new MemoryCrossCausalKVS();
+    cross_causal_serializer = new MemoryCrossCausalSerializer(cross_causal_kvs);
   } else if (kSelfTierId == kEbsTierId) {
     lww_serializer = new EBSLWWSerializer(thread_id);
     set_serializer = new EBSSetSerializer(thread_id);
     causal_serializer = new EBSCausalSerializer(thread_id);
+    cross_causal_serializer = new EBSCrossCausalSerializer(thread_id);
   } else {
     log->info("Invalid node type");
     exit(1);
@@ -205,6 +212,7 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
   serializers[LatticeType::LWW] = lww_serializer;
   serializers[LatticeType::SET] = set_serializer;
   serializers[LatticeType::CAUSAL] = causal_serializer;
+  serializers[LatticeType::CROSSCAUSAL] = cross_causal_serializer;
 
   // the set of changes made on this thread since the last round of gossip
   set<Key> local_changeset;
@@ -266,8 +274,11 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
   auto report_end = std::chrono::system_clock::now();
 
   unsigned long long working_time = 0;
-  unsigned long long working_time_map[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  unsigned long long working_time_map[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
   unsigned epoch = 0;
+
+  // Initialize a Heavy Hitters Sketch
+  AdaptiveThresholdHeavyHitters* sketch = new AdaptiveThresholdHeavyHitters();
 
   // enter event loop
   while (true) {
@@ -279,9 +290,9 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
 
       string serialized = kZmqUtil->recv_string(&join_puller);
       node_join_handler(thread_id, seed, public_ip, private_ip, log, serialized,
-                        global_hash_rings, local_hash_rings, metadata_map,
-                        join_remove_set, pushers, wt, join_gossip_map,
-                        self_join_count);
+                        global_hash_rings, local_hash_rings, stored_key_map,
+                        key_replication_map, join_remove_set, pushers, wt,
+                        join_gossip_map, self_join_count);
 
       auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                               std::chrono::system_clock::now() - work_start)
@@ -308,8 +319,8 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
       string serialized = kZmqUtil->recv_string(&self_depart_puller);
       self_depart_handler(thread_id, seed, public_ip, private_ip, log,
                           serialized, global_hash_rings, local_hash_rings,
-                          metadata_map, routing_ips, monitoring_ips, wt,
-                          pushers, serializers);
+                          stored_key_map, key_replication_map, routing_ips,
+                          monitoring_ips, wt, pushers, serializers);
 
       return;
     }
@@ -320,27 +331,25 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
       string serialized = kZmqUtil->recv_string(&request_puller);
       user_request_handler(access_count, seed, serialized, log,
                            global_hash_rings, local_hash_rings,
-                           pending_requests, key_access_tracker, metadata_map,
-                           local_changeset, wt, serializers, pushers);
+                           pending_requests, key_access_tracker, stored_key_map,
+                           key_replication_map, local_changeset, wt,
+                           serializers, pushers, sketch);
 
       auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                               std::chrono::system_clock::now() - work_start)
                               .count();
 
-      log->info("Handling a user request took {} seconds.",
-                std::to_string((double)time_elapsed / (double)1000000));
       working_time += time_elapsed;
       working_time_map[3] += time_elapsed;
     }
 
-    // receive gossip
     if (pollitems[4].revents & ZMQ_POLLIN) {
       auto work_start = std::chrono::system_clock::now();
 
       string serialized = kZmqUtil->recv_string(&gossip_puller);
       gossip_handler(seed, serialized, global_hash_rings, local_hash_rings,
-                     pending_gossip, metadata_map, wt, serializers, pushers,
-                     log);
+                     pending_gossip, stored_key_map, key_replication_map, wt,
+                     serializers, pushers, log);
 
       auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                               std::chrono::system_clock::now() - work_start)
@@ -354,11 +363,11 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
       auto work_start = std::chrono::system_clock::now();
 
       string serialized = kZmqUtil->recv_string(&replication_response_puller);
-      replication_response_handler(seed, access_count, log, serialized,
-                                   global_hash_rings, local_hash_rings,
-                                   pending_requests, pending_gossip,
-                                   key_access_tracker, metadata_map,
-                                   local_changeset, wt, serializers, pushers);
+      replication_response_handler(
+          seed, access_count, log, serialized, global_hash_rings,
+          local_hash_rings, pending_requests, pending_gossip,
+          key_access_tracker, stored_key_map, key_replication_map,
+          local_changeset, wt, serializers, pushers, sketch);
 
       auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                               std::chrono::system_clock::now() - work_start)
@@ -372,10 +381,10 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
       auto work_start = std::chrono::system_clock::now();
 
       string serialized = kZmqUtil->recv_string(&replication_change_puller);
-      replication_change_handler(public_ip, private_ip, thread_id, seed, log,
-                                 serialized, global_hash_rings,
-                                 local_hash_rings, metadata_map,
-                                 local_changeset, wt, serializers, pushers);
+      replication_change_handler(
+          public_ip, private_ip, thread_id, seed, log, serialized,
+          global_hash_rings, local_hash_rings, stored_key_map,
+          key_replication_map, local_changeset, wt, serializers, pushers);
 
       auto time_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                               std::chrono::system_clock::now() - work_start)
@@ -413,26 +422,30 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
           // Get the threads that we need to gossip to.
           ServerThreadList threads = kHashRingUtil->get_responsible_threads(
               wt.replication_response_connect_address(), key, is_metadata(key),
-              global_hash_rings, local_hash_rings, metadata_map, pushers,
+              global_hash_rings, local_hash_rings, key_replication_map, pushers,
               kAllTierIds, succeed, seed);
 
           if (succeed) {
             for (const ServerThread& thread : threads) {
-              addr_keyset_map[thread.gossip_connect_address()].insert(key);
+              if (!(thread == wt)) {
+                addr_keyset_map[thread.gossip_connect_address()].insert(key);
+              }
             }
           } else {
             log->error("Missing key replication factor in gossip routine.");
           }
 
           // Get the caches that we need to gossip to.
-          set<Address>& cache_ips = key_to_cache_ips[key];
-          for (const Address& cache_ip : cache_ips) {
-            CacheThread ct(cache_ip, 0);
-            addr_keyset_map[ct.cache_update_connect_address()].insert(key);
+          if (key_to_cache_ips.find(key) != key_to_cache_ips.end()) {
+            set<Address>& cache_ips = key_to_cache_ips[key];
+            for (const Address& cache_ip : cache_ips) {
+              CacheThread ct(cache_ip, 0);
+              addr_keyset_map[ct.cache_update_connect_address()].insert(key);
+            }
           }
         }
 
-        send_gossip(addr_keyset_map, pushers, serializers, metadata_map);
+        send_gossip(addr_keyset_map, pushers, serializers, stored_key_map);
         local_changeset.clear();
       }
 
@@ -442,7 +455,7 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
                               .count();
 
       working_time += time_elapsed;
-      working_time_map[7] += time_elapsed;
+      working_time_map[8] += time_elapsed;
     }
 
     // Collect and store internal statistics,
@@ -462,7 +475,7 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
 
       // compute total storage consumption
       unsigned long long consumption = 0;
-      for (const auto& key_pair : metadata_map) {
+      for (const auto& key_pair : stored_key_map) {
         consumption += key_pair.second.size_;
       }
 
@@ -508,33 +521,22 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
         kZmqUtil->send_string(serialized, &pushers[target_address]);
       }
 
-      // compute key access stats
+      // Get map of hot keys
+      std::unordered_map<Key, int> hot_key_map = sketch->get_hot_map();
       KeyAccessData access;
-      auto current_time = std::chrono::system_clock::now();
-
-      for (const auto& key_access_pair : key_access_tracker) {
+      for (const auto& key_access_pair : hot_key_map) {
         Key key = key_access_pair.first;
-        auto access_times = key_access_pair.second;
-
-        // garbage collect
-        for (const auto& time : access_times) {
-          if (std::chrono::duration_cast<std::chrono::seconds>(current_time -
-                                                               time)
-                  .count() >= kKeyMonitoringThreshold) {
-            access_times.erase(time);
-            break;
-          }
-        }
+        unsigned count = key_access_pair.second;
 
         // update key_access_frequency
         KeyAccessData_KeyCount* tp = access.add_keys();
         tp->set_key(key);
-        tp->set_access_count(access_times.size());
+        tp->set_access_count(count);
       }
 
-      // report key access stats
-      key =
-          get_metadata_key(wt, kSelfTierId, wt.tid(), MetadataType::key_access);
+      // report hot key access stats
+      key = get_metadata_key(wt, kSelfTierId, wt.tid(),
+                             MetadataType::key_access_hot);
       string serialized_access;
       access.SerializeToString(&serialized_access);
 
@@ -556,11 +558,54 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
         kZmqUtil->send_string(serialized, &pushers[target_address]);
       }
 
+      // Get map of cold keys
+      std::unordered_map<Key, int> cold_key_map = sketch->get_cold_map();
+      KeyAccessData cold_access;
+      for (const auto& key_access_pair : cold_key_map) {
+        Key key = key_access_pair.first;
+        unsigned count = key_access_pair.second;
+
+        // update key_access_frequency
+        KeyAccessData_KeyCount* tp = cold_access.add_keys();
+        tp->set_key(key);
+        tp->set_access_count(count);
+      }
+
+      // report hot key access stats
+      key = get_metadata_key(wt, kSelfTierId, wt.tid(),
+                             MetadataType::key_access_cold);
+      string cold_serialized_access;
+      cold_access.SerializeToString(&cold_serialized_access);
+
+      req.Clear();
+      req.set_type(RequestType::PUT);
+      prepare_put_tuple(req, key, LatticeType::LWW,
+                        serialize(ts, cold_serialized_access));
+
+      threads = kHashRingUtil->get_responsible_threads_metadata(
+          key, global_hash_rings[kMemoryTierId],
+          local_hash_rings[kMemoryTierId]);
+
+      if (threads.size() != 0) {
+        Address target_address =
+            std::next(begin(threads), rand_r(&seed) % threads.size())
+                ->key_request_connect_address();
+        string serialized;
+        req.SerializeToString(&serialized);
+        kZmqUtil->send_string(serialized, &pushers[target_address]);
+      }
+
+      // Reset sketch for next epoch
+      sketch->reset();
+
+<<<<<<< HEAD
+=======
       // report key size stats
+>>>>>>> 37bca4c5bad13ccb3ee86293ecb75cc56c998d35
       KeySizeData primary_key_size;
-      for (const auto& key_pair : metadata_map) {
-        if (is_primary_replica(key_pair.first, metadata_map, global_hash_rings,
-                               local_hash_rings, wt)) {
+      for (const auto& key_pair : stored_key_map) {
+        if (is_primary_replica(key_pair.first, key_replication_map,
+                               global_hash_rings, local_hash_rings, wt)) {
           KeySizeData_KeySize* ks = primary_key_size.add_key_sizes();
           ks->set_key(key_pair.first);
           ks->set_size(key_pair.second.size_);
@@ -677,13 +722,13 @@ void run(unsigned thread_id, Address public_ip, Address private_ip,
         join_gossip_map.erase(remove_address);
       }
 
-      send_gossip(addr_keyset_map, pushers, serializers, metadata_map);
+      send_gossip(addr_keyset_map, pushers, serializers, stored_key_map);
 
       // remove keys
       if (join_gossip_map.size() == 0) {
         for (const string& key : join_remove_set) {
-          serializers[metadata_map[key].type_]->remove(key);
-          metadata_map.erase(key);
+          serializers[stored_key_map[key].type_]->remove(key);
+          stored_key_map.erase(key);
         }
       }
     }
